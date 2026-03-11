@@ -889,18 +889,36 @@
 
     const sewerMainTypes = ["Manhole", "Lift Station", "Gravity Main", "Force Main", "Treatment Plant"];
 
-    const specialWeatherEvents = [
-      { event: "Tropical Storm Imelda", date: new Date("2019-09-19"), emoji: "⛈️" },
-      { event: "Hurricane Laura (Outer Bands)", date: new Date("2020-08-27"), emoji: "🌀" },
-      { event: "Hurricane Beta (Outer Bands)", date: new Date("2020-09-21"), emoji: "🌀" },
-      { event: "Winter Storm Uri", date: new Date("2021-02-15"), emoji: "❄️" },
-      { event: "Hurricane Nicholas", date: new Date("2021-09-14"), emoji: "🌀" },
-      { event: "Severe Thunderstorms and Tornadoes", date: new Date("2023-01-24"), emoji: "🌪️" },
-      { event: "Extreme Heat and Drought", date: new Date("2023-08-01"), emoji: "☀️" },
-      { event: "Hurricane Beryl", date: new Date("2024-07-08"), emoji: "🌀" },
-      { event: "Derecho", date: new Date("2024-05-16"), emoji: "💨" },
-      { event: "Winter Storm (Snow and Extreme Cold)", date: new Date("2025-01-20"), emoji: "❄️" }
-    ];
+const specialWeatherEvents = [
+  { event: "Memorial Day Flood", date: new Date("2015-05-25"), emoji: "🌧️" },
+
+  { event: "Tax Day Flood", date: new Date("2016-04-18"), emoji: "🌧️" },
+
+  { event: "Hurricane Harvey", date: new Date("2017-08-27"), emoji: "🌀" },
+
+  { event: "Houston Flash Flood Event", date: new Date("2019-05-07"), emoji: "🌧️" },
+  { event: "Tropical Storm Imelda", date: new Date("2019-09-19"), emoji: "⛈️" },
+
+  { event: "Houston Flash Floods", date: new Date("2020-04-22"), emoji: "🌧️" },
+  { event: "Hurricane Laura (Outer Bands)", date: new Date("2020-08-27"), emoji: "🌀" },
+  { event: "Hurricane Beta (Outer Bands)", date: new Date("2020-09-21"), emoji: "🌀" },
+
+  { event: "Winter Storm Uri", date: new Date("2021-02-15"), emoji: "❄️" },
+  { event: "Houston Major Flooding Event", date: new Date("2021-05-03"), emoji: "🌧️" },
+  { event: "Hurricane Nicholas", date: new Date("2021-09-14"), emoji: "🌀" },
+
+  { event: "Severe Thunderstorms and Tornadoes", date: new Date("2023-01-24"), emoji: "🌪️" },
+  { event: "Extreme Heat and Drought", date: new Date("2023-08-01"), emoji: "☀️" },
+
+  { event: "Houston Severe Storms", date: new Date("2024-01-09"), emoji: "⛈️" },
+  { event: "Houston Spring Flood Event", date: new Date("2024-04-10"), emoji: "🌧️" },
+  { event: "Houston Derecho", date: new Date("2024-05-16"), emoji: "💨" },
+  { event: "Hurricane Beryl", date: new Date("2024-07-08"), emoji: "🌀" },
+
+  { event: "Winter Storm (Snow and Extreme Cold)", date: new Date("2025-01-20"), emoji: "❄️" },
+
+  { event: "Arctic Freeze and Ice Storm", date: new Date("2026-01-24"), emoji: "❄️" }
+];
 
     const structureGroups = {
       "All": { color: "#FFFFFF", outline: "#CCCCCC" },
@@ -1770,3 +1788,4 @@ function initializeDateSlider() {
   </script>
 </body>
 </html>
+
