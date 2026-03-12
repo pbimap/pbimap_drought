@@ -1303,21 +1303,15 @@ function updateChart(aggDrought, aggSSO) {
           plugins: {
             legend: { labels: { color: "#00d4ff", font: { family: 'Orbitron' } } },
             title: { display: true, text: "Cumulative SSO Over Time", color: "#00d4ff", font: { size: 14, family: 'Orbitron' } },
-tooltip: {
-  mode: "nearest",
-  intersect: true,
-  backgroundColor: "rgba(10, 10, 30, 0.9)",
-  titleFont: { family: 'Orbitron' },
-  bodyFont: { family: 'Orbitron' },
-  callbacks: {
-    label: ctx => {
-      if (ctx.dataset.label === "Special Weather Events") {
-        return `${ctx.raw.date} | ${ctx.raw.event}`;
-      }
-      return `${ctx.dataset.label}: ${ctx.raw.y}`;
-    }
-  }
-}
+            tooltip: {
+              enabled: true, mode: "index", intersect: false, position: "nearest", backgroundColor: "rgba(10, 10, 30, 0.95)",
+              titleFont: { family: "Orbitron", size: 14, weight: "bold" }, bodyFont: { family: "Orbitron", size: 12 }, padding: 10, cornerRadius: 6,
+              borderColor: "rgba(0, 212, 255, 0.5)", borderWidth: 1, titleColor: "#00d4ff", bodyColor: "#e0e0e0",
+              callbacks: {
+                title: (tooltipItems) => formatDateForDisplay(new Date(tooltipItems[0].raw.x)),
+                label: (ctx) => ctx.dataset.label === "Cumulative SSO" ? `Cumulative SSO: ${ctx.parsed.y}` : (ctx.dataset.label === "Weather Events" && ctx.raw.event ? `${ctx.raw.event} (${formatDateForDisplay(ctx.raw.x)})` : "")
+              }
+            }
           }
         }
       });
@@ -1692,31 +1686,11 @@ function initializeDateSlider() {
             { label: "Moderate", data: aggDrought.map(r => ({ x: r.date, y: r.d1 })), borderColor: "#F09D33", backgroundColor: "rgba(240, 157, 51, 0.7)", fill: "-1", tension: 0.1, pointRadius: 0, order: 1 },
             { label: "Abn. Dry", data: aggDrought.map(r => ({ x: r.date, y: r.d0 })), borderColor: "#FDEFA4", backgroundColor: "rgba(253, 239, 164, 0.7)", fill: "-1", tension: 0.1, pointRadius: 0, order: 1 },
             { label: "SSO Count", data: aggSSO.map(r => ({ x: r.date, y: r.count })), borderColor: "#00FF00", backgroundColor: "rgba(0, 255, 0, 0.7)", fill: false, tension: 0, pointRadius: 3, yAxisID: "y2", order: 0 },
-            {
-  label: "Weather Events",
-  data: specialWeatherEvents.map(event => ({
-    x: event.date,
-    y: 105,
-    event: event.event,
-    date: event.date.toISOString().split('T')[0]
-  })),
-  type: "scatter",
-  yAxisID: "y",
-  showLine: false,
-  pointRadius: 4,
-  pointHoverRadius: 8,
-  pointBackgroundColor: "rgba(0,0,0,0)",
-  pointBorderColor: "rgba(0,0,0,0)",
-  order: -1
-}
+            { label: "Special Weather Events", data: specialWeatherEvents.map(event => ({ x: event.date, y: 100, event: event.event, date: event.date.toISOString().split('T')[0] })), type: "scatter", yAxisID: "y", pointRadius: 0, pointHoverRadius: 50, showLine: false, order: -1, tooltip: { callbacks: { label: ctx => `${ctx.raw.date} | ${ctx.raw.event}` } } }
           ]
         },
         options: {
-          responsive: true, maintainAspectRatio: false, interaction: {
-				  mode: "nearest",
-				  intersect: true,
-				  axis: "x"
-				},
+          responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
           scales: { x: { type: "time", time: { unit: "month", tooltipFormat: "yyyy-MM-dd" }, ticks: { color: "#00d4ff" }, grid: { color: "rgba(0, 212, 255, 0.2)" } }, y: { stacked: true, min: 0, suggestedMax: 110, ticks: { color: "#00d4ff" }, grid: { color: "rgba(0, 212, 255, 0.2)" } }, y2: { type: "linear", position: "right", ticks: { color: "#00ff00" }, grid: { drawOnChartArea: false } } },
           plugins: {
             legend: { labels: { color: "#00d4ff", font: { family: 'Orbitron' } }, position: "top" },
@@ -1808,6 +1782,3 @@ function initializeDateSlider() {
   </script>
 </body>
 </html>
-
-
-
