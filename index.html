@@ -867,918 +867,315 @@
     </div>
   </div>
   <script>
-    const droughtApiUrl = "https://services9.arcgis.com/RHVPKKiFTONKtxq3/ArcGIS/rest/services/US_Drought_Intensity_v1/FeatureServer/1/query" +
-      "?where=admin_fips%3D48201" +
-      "&outFields=*" +
-      "&f=json";
-    const ssoApiUrl = "https://services.arcgis.com/NummVBqZSIJKUeVR/arcgis/rest/services/RSSO_Package/FeatureServer/0/query";
+/* ===============================
+   CONFIG
+================================ */
 
-    let rawDroughtData = [];
-    let rawSSOFeatures = [];
-    let myChart, mapView, cumulativeChart;
-    let uniqueCauses = [];
-    let selectedCauses = new Set();
-    let selectedStructureGroup = "All";
-    let currentPeriod = 'monthly';
-    let selectedDateRange = { start: new Date("2024-01-01"), end: new Date("2025-03-16") };
-    let mapVisible = true;
-    let isPlaying = false;
-    let animationInterval = null;
-    let currentAnimationDate = new Date("2019-01-01");
-    let animationIndex = 0;
+const droughtApiUrl =
+"https://services9.arcgis.com/RHVPKKiFTONKtxq3/ArcGIS/rest/services/US_Drought_Intensity_v1/FeatureServer/1/query?where=admin_fips%3D48201&outFields=*&f=json";
 
-    const sewerMainTypes = ["Manhole", "Lift Station", "Gravity Main", "Force Main", "Treatment Plant"];
+const ssoApiUrl =
+"https://services.arcgis.com/NummVBqZSIJKUeVR/arcgis/rest/services/RSSO_Package/FeatureServer/0/query";
+
+let rawDroughtData = [];
+let rawSSOFeatures = [];
+
+let myChart;
+let mapView;
+
+let currentPeriod = "monthly";
+
+let selectedDateRange = {
+  start: new Date("2019-01-01"),
+  end: new Date()
+};
+
+/* ===============================
+   WEATHER EVENTS
+================================ */
 
 const specialWeatherEvents = [
   { event: "Houston Flash Flood Event", date: new Date("2019-05-07"), emoji: "🌧️" },
   { event: "Tropical Storm Imelda", date: new Date("2019-09-19"), emoji: "⛈️" },
-
   { event: "Houston Flash Floods", date: new Date("2020-04-22"), emoji: "🌧️" },
   { event: "Hurricane Laura (Outer Bands)", date: new Date("2020-08-27"), emoji: "🌀" },
   { event: "Hurricane Beta (Outer Bands)", date: new Date("2020-09-21"), emoji: "🌀" },
-
   { event: "Winter Storm Uri", date: new Date("2021-02-15"), emoji: "❄️" },
   { event: "Houston Major Flooding Event", date: new Date("2021-05-03"), emoji: "🌧️" },
   { event: "Hurricane Nicholas", date: new Date("2021-09-14"), emoji: "🌀" },
-
-  { event: "Severe Thunderstorms and Tornadoes", date: new Date("2023-01-24"), emoji: "🌪️" },
+  { event: "Severe Thunderstorms", date: new Date("2023-01-24"), emoji: "🌪️" },
   { event: "Extreme Heat and Drought", date: new Date("2023-08-01"), emoji: "☀️" },
-
-  { event: "Houston Severe Storms", date: new Date("2024-01-09"), emoji: "⛈️" },
-  { event: "Houston Spring Flood Event", date: new Date("2024-04-10"), emoji: "🌧️" },
   { event: "Houston Derecho", date: new Date("2024-05-16"), emoji: "💨" },
   { event: "Hurricane Beryl", date: new Date("2024-07-08"), emoji: "🌀" },
-
-  { event: "Winter Storm (Snow and Extreme Cold)", date: new Date("2025-01-20"), emoji: "❄️" },
-
-  { event: "Arctic Freeze and Ice Storm", date: new Date("2026-01-24"), emoji: "❄️" }
+  { event: "Winter Storm", date: new Date("2025-01-20"), emoji: "❄️" },
+  { event: "Arctic Freeze", date: new Date("2026-01-24"), emoji: "❄️" }
 ];
 
-    const structureGroups = {
-      "All": { color: "#FFFFFF", outline: "#CCCCCC" },
-      "Main": { color: "#00FF99", outline: "#00CC77" },
-      "Service Lateral": { color: "#FF00CC", outline: "#CC0099" }
-    };
+/* ===============================
+   UTIL
+================================ */
 
-    function showLoading() { document.getElementById("loadingOverlay").style.display = "flex"; }
-    function hideLoading() { document.getElementById("loadingOverlay").style.display = "none"; }
-
-    function fetchDroughtData() {
-      return fetch(droughtApiUrl)
-        .then(response => response.ok ? response.json() : Promise.reject("Drought data error: " + response.status))
-        .then(json => {
-          if (!json.features || json.features.length === 0) throw new Error("No drought features returned");
-          return json.features
-            .map(f => ({
-              date: new Date(f.attributes.ddate),
-              d4: f.attributes.d4 || 0, d3: f.attributes.d3 || 0, d2: f.attributes.d2 || 0,
-              d1: f.attributes.d1 || 0, d0: f.attributes.d0 || 0, none: f.attributes.nothing || 0
-            }))
-            .filter(r => r.date >= new Date("2019-01-01"))
-            .sort((a, b) => a.date - b.date);
-        });
-    }
-
-    function fetchSSOData(resultOffset = 0, accumulated = []) {
-      const queryParams = new URLSearchParams({
-        where: "System LIKE '%ublic%' AND STARTDATE >= date '2019-01-01'",
-        outFields: "*", f: "json", returnGeometry: true, resultOffset: resultOffset, resultRecordCount: 2000, orderByFields: "STARTDATE ASC"
-      });
-      return fetch(ssoApiUrl + "?" + queryParams.toString())
-        .then(response => response.ok ? response.json() : Promise.reject("SSO data error: " + response.status))
-        .then(json => {
-          if (!json.features) return accumulated;
-          accumulated.push(...json.features);
-          if (json.exceededTransferLimit) return fetchSSOData(resultOffset + 2000, accumulated);
-          return accumulated;
-        });
-    }
-
-    function normalizeCause(cause) { return cause ? cause.toLowerCase().replace(/–/g, "-").replace(/\s+/g, " ").trim() : "Unknown"; }
-
-    function groupCauses(causes) {
-      const grouped = { "Grease": [], "Rags/Wipes": [], "Roots": [], "Structural Issues": [], "Blockages": [],
-        "Wet Weather": [], "Lift Station/Treatment Plant/Power": [], "Cross Connections": [], "Other": [], "Unknown": [] };
-      causes.forEach(cause => {
-        const normalized = normalizeCause(cause);
-        const original = cause || "Unknown";
-        if (normalized.includes("grease blockage")) grouped["Grease"].push(original);
-        else if (normalized.includes("rags/wipes")) grouped["Rags/Wipes"].push(original);
-        else if (normalized.includes("roots")) grouped["Roots"].push(original);
-        else if (normalized.includes("pump/lift station") || normalized.includes("wwtp") || normalized.includes("power outage")) grouped["Lift Station/Treatment Plant/Power"].push(original);
-        else if (normalized.includes("structural failure") || normalized.includes("structural blockage")) grouped["Structural Issues"].push(original);
-        else if (normalized.includes("temporary blockage")) grouped["Blockages"].push(original);
-        else if (normalized.includes("wet weather")) grouped["Wet Weather"].push(original);
-        else if (normalized.includes("cross connection") || normalized.includes("cross-connection")) grouped["Cross Connections"].push(original);
-        else if (normalized === "unknown") grouped["Unknown"].push(original);
-        else grouped["Other"].push(original);
-      });
-      for (const group in grouped) grouped[group].sort();
-      return grouped;
-    }
-
-    function createStructureTypeSwitch(containerSelector) {
-      const buttons = document.querySelectorAll(`${containerSelector} .structure-btn`);
-      buttons.forEach(button => {
-        button.addEventListener('click', () => {
-          buttons.forEach(btn => btn.classList.remove('active'));
-          button.classList.add('active');
-          selectedStructureGroup = button.getAttribute('data-type') === "All" ? "All" :
-                                   button.getAttribute('data-type') === "Main" ? "Main" : "Service Lateral";
-          updateChartWithCurrentPeriod();
-          updateMap();
-        });
-      });
-    }
-
-    function createCauseCheckboxes(containerId) {
-      if (!rawSSOFeatures || rawSSOFeatures.length === 0) {
-        document.getElementById(containerId).innerHTML = "<p>No data available</p>";
-        return;
-      }
-      uniqueCauses = [...new Set(rawSSOFeatures.map(f => f.attributes.CAUSE))];
-      const groupedCauses = groupCauses(uniqueCauses);
-      const container = document.getElementById(containerId);
-      container.innerHTML = "";
-      const allCheckbox = document.createElement("div");
-      allCheckbox.className = "checkbox-group";
-      allCheckbox.innerHTML = `<label><input type="checkbox" id="cause-all-${containerId}" checked> All</label>`;
-      container.appendChild(allCheckbox);
-
-      const categoryOrder = ["Grease", "Rags/Wipes", "Roots", "Structural Issues", "Blockages",
-                            "Wet Weather", "Lift Station/Treatment Plant/Power", "Cross Connections", "Other", "Unknown"];
-      categoryOrder.forEach(category => {
-        const causes = groupedCauses[category];
-        if (causes.length === 0) return;
-        const details = document.createElement("details");
-        details.className = "checkbox-group";
-        details.innerHTML = `<summary><input type="checkbox" class="category-checkbox" data-category="${category}" checked> ${category}</summary>`;
-        causes.forEach(cause => {
-          details.innerHTML += `<label><input type="checkbox" class="cause-checkbox" data-cause="${cause || 'Unknown'}" checked> ${cause || 'Unknown'}</label>`;
-          selectedCauses.add(cause || 'Unknown');
-        });
-        const categoryCheckbox = details.querySelector(".category-checkbox");
-        categoryCheckbox.addEventListener("change", (e) => {
-          const isChecked = e.target.checked;
-          details.querySelectorAll(".cause-checkbox").forEach(cb => {
-            cb.checked = isChecked;
-            const cause = cb.getAttribute("data-cause");
-            isChecked ? selectedCauses.add(cause) : selectedCauses.delete(cause);
-          });
-          updateAllCheckbox();
-          updateChartWithCurrentPeriod();
-          updateMap();
-        });
-        details.querySelectorAll(".cause-checkbox").forEach(cb => {
-          cb.addEventListener("change", (e) => {
-            const cause = e.target.getAttribute("data-cause");
-            e.target.checked ? selectedCauses.add(cause) : selectedCauses.delete(cause);
-            const allChecked = [...details.querySelectorAll(".cause-checkbox")].every(c => c.checked);
-            categoryCheckbox.checked = allChecked;
-            updateAllCheckbox();
-            updateChartWithCurrentPeriod();
-            updateMap();
-          });
-        });
-        container.appendChild(details);
-      });
-
-      document.getElementById(`cause-all-${containerId}`).addEventListener("change", (e) => {
-        const isChecked = e.target.checked;
-        container.querySelectorAll(".cause-checkbox, .category-checkbox").forEach(cb => {
-          cb.checked = isChecked;
-          if (cb.classList.contains("cause-checkbox")) {
-            const cause = cb.getAttribute("data-cause");
-            isChecked ? selectedCauses.add(cause) : selectedCauses.delete(cause);
-          }
-        });
-        updateChartWithCurrentPeriod();
-        updateMap();
-      });
-
-      function updateAllCheckbox() {
-        const allCheckbox = document.getElementById(`cause-all-${containerId}`);
-        if (allCheckbox) {
-          allCheckbox.checked = categoryOrder.every(cat => {
-            const catCheckbox = container.querySelector(`[data-category="${cat}"]`);
-            return !catCheckbox || catCheckbox.checked;
-          });
-        }
-      }
-    }
-
-    function aggregateData(data, period) {
-      const filteredData = data.filter(r => r.date >= selectedDateRange.start && r.date <= selectedDateRange.end);
-      if (period === 'weekly') return filteredData;
-      const groups = {};
-      filteredData.forEach(record => {
-        const date = new Date(record.date);
-        const key = period === 'monthly' ? `${date.getFullYear()}-${date.getMonth() + 1}` : `${date.getFullYear()}`;
-        groups[key] = groups[key] || [];
-        groups[key].push(record);
-      });
-      return Object.entries(groups).map(([key, group]) => {
-        const sum = group.reduce((acc, cur) => ({
-          d4: acc.d4 + cur.d4, d3: acc.d3 + cur.d3, d2: acc.d2 + cur.d2,
-          d1: acc.d1 + cur.d1, d0: acc.d0 + cur.d0, none: acc.none + cur.none
-        }), { d4: 0, d3: 0, d2: 0, d1: 0, d0: 0, none: 0 });
-        const count = group.length;
-        return {
-          date: group[0].date,
-          d4: sum.d4 / count, d3: sum.d3 / count, d2: sum.d2 / count,
-          d1: sum.d1 / count, d0: sum.d0 / count, none: sum.none / count
-        };
-      }).sort((a, b) => a.date - b.date);
-    }
-
-    function getWeekEndDate(date) {
-      const d = new Date(date);
-      d.setDate(d.getDate() + (6 - d.getDay()));
-      return d;
-    }
-
-    function aggregateSSOData(features, period) {
-      let filteredFeatures = features.filter(f => new Date(f.attributes.STARTDATE) >= selectedDateRange.start && new Date(f.attributes.STARTDATE) <= selectedDateRange.end);
-      if (selectedStructureGroup === "Main") filteredFeatures = filteredFeatures.filter(f => sewerMainTypes.includes(f.attributes.STRUCTURETYPE));
-      else if (selectedStructureGroup === "Service Lateral") filteredFeatures = filteredFeatures.filter(f => !sewerMainTypes.includes(f.attributes.STRUCTURETYPE) || !f.attributes.STRUCTURETYPE);
-      filteredFeatures = selectedCauses.size === 0 || selectedCauses.size === uniqueCauses.length ? filteredFeatures : filteredFeatures.filter(f => selectedCauses.has(f.attributes.CAUSE || 'Unknown'));
-
-      const groups = {};
-      filteredFeatures.forEach(f => {
-        const eventDate = new Date(f.attributes.STARTDATE);
-        let key, repDate;
-        if (period === 'weekly') {
-          const weekEnd = getWeekEndDate(eventDate);
-          key = weekEnd.toISOString();
-          repDate = weekEnd;
-        } else if (period === 'monthly') {
-          key = `${eventDate.getFullYear()}-${eventDate.getMonth() + 1}`;
-          repDate = new Date(eventDate.getFullYear(), eventDate.getMonth(), 1);
-        } else if (period === 'yearly') {
-          key = `${eventDate.getFullYear()}`;
-          repDate = new Date(eventDate.getFullYear(), 0, 1);
-        }
-        groups[key] = groups[key] || { date: repDate, count: 0 };
-        groups[key].count += 1;
-      });
-      return Object.values(groups).sort((a, b) => a.date - b.date);
-    }
-
-    function aggregateCumulativeSSOData(features, endDate) {
-      let filteredFeatures = features.filter(f => new Date(f.attributes.STARTDATE) <= endDate && new Date(f.attributes.STARTDATE) >= selectedDateRange.start);
-      if (selectedStructureGroup === "Main") filteredFeatures = filteredFeatures.filter(f => sewerMainTypes.includes(f.attributes.STRUCTURETYPE));
-      else if (selectedStructureGroup === "Service Lateral") filteredFeatures = filteredFeatures.filter(f => !sewerMainTypes.includes(f.attributes.STRUCTURETYPE) || !f.attributes.STRUCTURETYPE);
-      filteredFeatures = selectedCauses.size === 0 || selectedCauses.size === uniqueCauses.length ? filteredFeatures : filteredFeatures.filter(f => selectedCauses.has(f.attributes.CAUSE || 'Unknown'));
-
-      const monthlyGroups = {};
-      filteredFeatures.forEach(f => {
-        const eventDate = new Date(f.attributes.STARTDATE);
-        const key = `${eventDate.getFullYear()}-${eventDate.getMonth() + 1}`;
-        monthlyGroups[key] = monthlyGroups[key] || { date: new Date(eventDate.getFullYear(), eventDate.getMonth(), 1), count: 0 };
-        monthlyGroups[key].count += 1;
-      });
-
-      const sortedGroups = Object.values(monthlyGroups).sort((a, b) => a.date - b.date);
-      let cumulativeCount = 0;
-      return sortedGroups.map(group => {
-        cumulativeCount += group.count;
-        return { date: group.date, count: cumulativeCount };
-      });
-    }
-
-    function formatDateForDisplay(date) {
-      const d = new Date(date);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
-    }
-
-    function formatMonthForDisplay(date) {
-      const d = new Date(date);
-      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-    }
-
-    function getPeriodDateRange(date, period) {
-      const startDate = new Date(date);
-      const endDate = new Date(startDate);
-      if (period === 'weekly') endDate.setDate(startDate.getDate() + 6);
-      else if (period === 'monthly') endDate.setMonth(startDate.getMonth() + 1, 0);
-      else if (period === 'yearly') endDate.setFullYear(startDate.getFullYear() + 1, 11, 31);
-      return { start: startDate, end: endDate };
-    }
-
-function updateChart(aggDrought, aggSSO) {
-  myChart.data.datasets[0].data = aggDrought.map(r => ({ x: r.date, y: r.d4 }));
-  myChart.data.datasets[1].data = aggDrought.map(r => ({ x: r.date, y: r.d3 }));
-  myChart.data.datasets[2].data = aggDrought.map(r => ({ x: r.date, y: r.d2 }));
-  myChart.data.datasets[3].data = aggDrought.map(r => ({ x: r.date, y: r.d1 }));
-  myChart.data.datasets[4].data = aggDrought.map(r => ({ x: r.date, y: r.d0 }));
-  myChart.data.datasets[5].data = aggSSO.map(r => ({ x: r.date, y: r.count }));
-  myChart.options.plugins.title.text = `Drought & Public Sewer Overflow (${currentPeriod.charAt(0).toUpperCase() + currentPeriod.slice(1)})`;
-  myChart.options.plugins.annotation.annotations = [
-    ...specialWeatherEvents.filter(e => e.date >= selectedDateRange.start && e.date <= selectedDateRange.end).map((e, i) => ({
-      type: 'label', xValue: e.date, yValue: 100, content: e.emoji, color: '#ffffff', font: { size: 20 }, position: 'center', xAdjust: 0, yAdjust: -5, backgroundColor: 'rgba(0, 0, 0, 0)', borderWidth: 0
-    })),
-    {
-      type: 'line', id: 'cursorLine', mode: 'vertical', scaleID: 'x', value: aggSSO.length > 0 ? aggSSO[aggSSO.length - 1].date : selectedDateRange.end, // Use the last SSO date or end of range
-      borderColor: '#00d4ff', borderWidth: 2, label: { enabled: true, content: aggSSO.length > 0 ? formatDateForDisplay(aggSSO[aggSSO.length - 1].date) : 'End', position: 'top', backgroundColor: 'rgba(0, 212, 255, 0.8)', font: { size: 12 } }
-    }
-  ];
-  myChart.update();
+function formatDate(d) {
+  const date = new Date(d);
+  return date.toISOString().split("T")[0];
 }
 
-    function updateChartWithCurrentPeriod() {
-      const aggDrought = aggregateData(rawDroughtData, currentPeriod);
-      const aggSSO = aggregateSSOData(rawSSOFeatures, currentPeriod);
-      updateChart(aggDrought, aggSSO);
-      document.querySelectorAll("#weeklyBtn, #monthlyBtn, #yearlyBtn").forEach(btn => btn.classList.remove("selected"));
-      document.getElementById(`${currentPeriod}Btn`).classList.add("selected");
-    }
+/* ===============================
+   DATA FETCH
+================================ */
 
-    function initializeMap() {
-      return new Promise((resolve, reject) => {
-        require(["esri/Map", "esri/views/MapView", "esri/layers/FeatureLayer", "esri/widgets/Legend", "esri/widgets/Expand"],
-        (Map, MapView, FeatureLayer, Legend, Expand) => {
-          const ssoLayer = new FeatureLayer({
-            url: "https://services.arcgis.com/NummVBqZSIJKUeVR/arcgis/rest/services/RSSO_Package/FeatureServer/0",
-            outFields: ["*"], definitionExpression: "System LIKE '%ublic%' AND STARTDATE >= '2019-01-01'",
-            renderer: {
-              type: "unique-value",
-              valueExpression: `var structureType = $feature.STRUCTURETYPE; if (IsEmpty(structureType)) return 'Service Lateral'; if (Includes(['Manhole', 'Lift Station', 'Gravity Main', 'Force Main', 'Treatment Plant'], structureType)) return 'Main'; return 'Service Lateral';`,
-              uniqueValueInfos: [
-                { value: "Main", symbol: { type: "simple-marker", color: structureGroups["Main"].color, size: 8, outline: { color: structureGroups["Main"].outline, width: 1.5 } } },
-                { value: "Service Lateral", symbol: { type: "simple-marker", color: structureGroups["Service Lateral"].color, size: 8, outline: { color: structureGroups["Service Lateral"].outline, width: 1.5 } } }
-              ],
-              defaultSymbol: { type: "simple-marker", color: structureGroups["All"].color, size: 8, outline: { color: structureGroups["All"].outline, width: 1.5 } }
-            }
-          });
-          const map = new Map({ basemap: "streets-night-vector", layers: [ssoLayer] });
-          mapView = new MapView({ container: "map", map: map, center: [-95.3632715, 29.7632836], zoom: 10 });
-          const legend = new Legend({ view: mapView, layerInfos: [{ layer: ssoLayer, title: "SSO Events by Structure Type" }] });
-          const legendExpand = new Expand({ view: mapView, content: legend, expanded: false, expandTooltip: "Show Legend", collapseTooltip: "Hide Legend" });
-          mapView.ui.add(legendExpand, "top-right");
-          mapView.when(() => { updateMap(); resolve(); }).catch(err => reject(err));
-        }, err => reject(err));
-      });
-    }
-	    function updateMap() {
-      if (!mapView) return;
-      require(["esri/layers/FeatureLayer"], (FeatureLayer) => {
-        const ssoLayer = mapView.map.layers.find(layer => layer.url.includes("RSSO_Package"));
-        if (!ssoLayer) return;
-        let ssoWhereClause = `System LIKE '%ublic%' AND STARTDATE >= '${formatDateForDisplay(selectedDateRange.start)}' AND STARTDATE <= '${formatDateForDisplay(selectedDateRange.end)}'`;
-        if (selectedStructureGroup === "Main") ssoWhereClause += ` AND STRUCTURETYPE IN ('${sewerMainTypes.join("','")}')`;
-        else if (selectedStructureGroup === "Service Lateral") ssoWhereClause += ` AND (STRUCTURETYPE NOT IN ('${sewerMainTypes.join("','")}') OR STRUCTURETYPE IS NULL)`;
-        if (selectedCauses.size > 0 && selectedCauses.size < uniqueCauses.length) {
-          const causesArray = Array.from(selectedCauses).map(c => c === "Unknown" ? "CAUSE IS NULL" : `CAUSE = '${c}'`);
-          ssoWhereClause += ` AND (${causesArray.join(" OR ")})`;
-        }
-        ssoLayer.definitionExpression = ssoWhereClause;
-      });
-    }
+function fetchDroughtData() {
+  return fetch(droughtApiUrl)
+    .then(r => r.json())
+    .then(json => {
+      return json.features.map(f => ({
+        date: new Date(f.attributes.ddate),
+        d4: f.attributes.d4 || 0,
+        d3: f.attributes.d3 || 0,
+        d2: f.attributes.d2 || 0,
+        d1: f.attributes.d1 || 0,
+        d0: f.attributes.d0 || 0
+      }));
+    });
+}
 
-    function updateMapCumulative(endDate) {
-      if (!mapView) return;
-      require(["esri/layers/FeatureLayer"], (FeatureLayer) => {
-        const ssoLayer = mapView.map.layers.find(layer => layer.url.includes("RSSO_Package"));
-        if (!ssoLayer) return;
-        let ssoWhereClause = `System LIKE '%ublic%' AND STARTDATE >= '${formatDateForDisplay(selectedDateRange.start)}' AND STARTDATE <= '${formatDateForDisplay(endDate)}'`;
-        if (selectedStructureGroup === "Main") ssoWhereClause += ` AND STRUCTURETYPE IN ('${sewerMainTypes.join("','")}')`;
-        else if (selectedStructureGroup === "Service Lateral") ssoWhereClause += ` AND (STRUCTURETYPE NOT IN ('${sewerMainTypes.join("','")}') OR STRUCTURETYPE IS NULL)`;
-        if (selectedCauses.size > 0 && selectedCauses.size < uniqueCauses.length) {
-          const causesArray = Array.from(selectedCauses).map(c => c === "Unknown" ? "CAUSE IS NULL" : `CAUSE = '${c}'`);
-          ssoWhereClause += ` AND (${causesArray.join(" OR ")})`;
-        }
-        ssoLayer.definitionExpression = ssoWhereClause;
-        ssoLayer.renderer = {
-          type: "simple",
-          symbol: { type: "simple-marker", style: "diamond", color: [255, 255, 0, 0.9], size: 6, outline: { color: [255, 153, 0, 1], width: 1.5 }, haloColor: [255, 255, 255, 0.7], haloSize: 3, effect: "bloom(1.5, 0.5px, 0.1)" }
-        };
-        const historyDiv = document.getElementById("ssoHistory");
-        historyDiv.style.display = "block";
-        const structureText = selectedStructureGroup === "All" ? "All Structures" : selectedStructureGroup;
-        let causesText = selectedCauses.size === 0 || selectedCauses.size === uniqueCauses.length ? "All Causes" : Object.keys(groupCauses(Array.from(selectedCauses))).filter(group => groupCauses(Array.from(selectedCauses))[group].length > 0).join(", ");
-        historyDiv.textContent = `[${formatMonthForDisplay(selectedDateRange.start)} -> ${formatMonthForDisplay(endDate)}] | ${structureText} | ${causesText}`;
-      });
-    }
+function fetchSSOData(offset = 0, acc = []) {
+  const params = new URLSearchParams({
+    where: "System LIKE '%ublic%' AND STARTDATE >= date '2019-01-01'",
+    outFields: "*",
+    f: "json",
+    returnGeometry: true,
+    resultOffset: offset,
+    resultRecordCount: 2000,
+    orderByFields: "STARTDATE ASC"
+  });
 
-    function resetMapToNormal() {
-      updateMap();
-      if (!mapView) return;
-      require(["esri/layers/FeatureLayer"], (FeatureLayer) => {
-        const ssoLayer = mapView.map.layers.find(layer => layer.url.includes("RSSO_Package"));
-        if (ssoLayer) {
-          ssoLayer.renderer = {
-            type: "unique-value",
-            valueExpression: `var structureType = $feature.STRUCTURETYPE; if (IsEmpty(structureType)) return 'Service Lateral'; if (Includes(['Manhole', 'Lift Station', 'Gravity Main', 'Force Main', 'Treatment Plant'], structureType)) return 'Main'; return 'Service Lateral';`,
-            uniqueValueInfos: [
-              { value: "Main", symbol: { type: "simple-marker", color: structureGroups["Main"].color, size: 8, outline: { color: structureGroups["Main"].outline, width: 1.5 } } },
-              { value: "Service Lateral", symbol: { type: "simple-marker", color: structureGroups["Service Lateral"].color, size: 8, outline: { color: structureGroups["Service Lateral"].outline, width: 1.5 } } }
-            ],
-            defaultSymbol: { type: "simple-marker", color: structureGroups["All"].color, size: 8, outline: { color: structureGroups["All"].outline, width: 1.5 } }
-          };
-        }
-      });
-      const historyDiv = document.getElementById("ssoHistory");
-      historyDiv.style.display = "none";
-      historyDiv.textContent = `[${formatMonthForDisplay(selectedDateRange.start)} -> ${formatMonthForDisplay(selectedDateRange.end)}]`;
-    }
+  return fetch(`${ssoApiUrl}?${params}`)
+    .then(r => r.json())
+    .then(json => {
+      acc.push(...json.features);
 
-    function initializeCumulativeChart() {
-      const ctx = document.getElementById("cumulativeSSOChart").getContext("2d");
-      cumulativeChart = new Chart(ctx, {
-        type: "line",
-        data: {
-          datasets: [
-            { label: "Cumulative SSO", data: [], borderColor: "#00ff00", backgroundColor: "rgba(0, 255, 0, 0.2)", fill: true, tension: 0.1, pointRadius: 0, pointHitRadius: 10 },
-            { label: "Weather Events", data: [], type: "scatter", pointStyle: "circle", pointRadius: 8, pointBackgroundColor: "#ff3366", pointBorderColor: "#ffffff", pointBorderWidth: 2, showLine: false, pointHitRadius: 15 }
-          ]
-        },
-        options: {
-          responsive: true,
-          maintainAspectRatio: false,
-          layout: { padding: { bottom: 40 } },
-          scales: {
-            x: { type: "time", time: { unit: "month", displayFormats: { month: "MMM yyyy" }, tooltipFormat: "yyyy-MM-dd" }, ticks: { color: "#00d4ff", maxRotation: 45, minRotation: 45, autoSkip: true, maxTicksLimit: 12, font: { size: 12, family: 'Orbitron' }, padding: 10 }, grid: { color: "rgba(0, 212, 255, 0.2)" } },
-            y: { min: 0, ticks: { color: "#00d4ff", font: { family: 'Orbitron' } }, grid: { color: "rgba(0, 212, 255, 0.2)" } }
-          },
-          plugins: {
-            legend: { labels: { color: "#00d4ff", font: { family: 'Orbitron' } } },
-            title: { display: true, text: "Cumulative SSO Over Time", color: "#00d4ff", font: { size: 14, family: 'Orbitron' } },
-            tooltip: {
-              enabled: true, mode: "index", intersect: false, position: "nearest", backgroundColor: "rgba(10, 10, 30, 0.95)",
-              titleFont: { family: "Orbitron", size: 14, weight: "bold" }, bodyFont: { family: "Orbitron", size: 12 }, padding: 10, cornerRadius: 6,
-              borderColor: "rgba(0, 212, 255, 0.5)", borderWidth: 1, titleColor: "#00d4ff", bodyColor: "#e0e0e0",
-              callbacks: {
-                title: (tooltipItems) => formatDateForDisplay(new Date(tooltipItems[0].raw.x)),
-                label: (ctx) => ctx.dataset.label === "Cumulative SSO" ? `Cumulative SSO: ${ctx.parsed.y}` : (ctx.dataset.label === "Weather Events" && ctx.raw.event ? `${ctx.raw.event} (${formatDateForDisplay(ctx.raw.x)})` : "")
-              }
-            }
-          }
-        }
-      });
-    }
+      if (json.exceededTransferLimit) {
+        return fetchSSOData(offset + 2000, acc);
+      }
 
-    function updateCumulativeChart(endDate) {
-      const cumulativeData = aggregateCumulativeSSOData(rawSSOFeatures, endDate);
-      const weatherData = specialWeatherEvents
-        .filter(event => event.date <= endDate && event.date >= selectedDateRange.start)
-        .map(event => {
-          const closestCumulative = cumulativeData.reduce((prev, curr) => Math.abs(curr.date - event.date) < Math.abs(prev.date - event.date) ? curr : prev);
-          return { x: event.date, y: closestCumulative.count, event: event.event, emoji: event.emoji };
-        });
+      return acc;
+    });
+}
 
-      cumulativeChart.data.datasets[0].data = cumulativeData.map(d => ({ x: d.date, y: d.count }));
-      cumulativeChart.data.datasets[1].data = weatherData.map(d => ({ x: d.x, y: d.y, event: d.event }));
-      cumulativeChart.options.plugins.annotation = {
-        annotations: weatherData.map((d, i) => ({
-          type: 'label', xValue: d.x, yValue: d.y, content: d.emoji, color: '#ff3366', font: { size: 16 }, position: 'center', xAdjust: 0, yAdjust: -20, backgroundColor: 'rgba(0, 0, 0, 0)', borderWidth: 0
-        }))
+/* ===============================
+   AGGREGATION
+================================ */
+
+function aggregateSSO(features) {
+  const groups = {};
+
+  features.forEach(f => {
+    const date = new Date(f.attributes.STARTDATE);
+
+    const key =
+      date.getFullYear() + "-" + (date.getMonth() + 1);
+
+    if (!groups[key]) {
+      groups[key] = {
+        date: new Date(date.getFullYear(), date.getMonth(), 1),
+        count: 0
       };
-      cumulativeChart.update();
     }
 
-    function toggleHistoryAnimation() {
-      const playBtnMobile = document.getElementById("playHistoryBtnMobile");
-      const playBtnDesktop = document.getElementById("playHistoryBtnDesktop");
-      const resetBtnMobile = document.getElementById("resetHistoryBtnMobile");
-      const resetBtnDesktop = document.getElementById("resetHistoryBtnDesktop");
-      const playBtn = window.innerWidth <= 768 ? playBtnMobile : playBtnDesktop;
-      const resetBtn = window.innerWidth <= 768 ? resetBtnMobile : resetBtnDesktop;
+    groups[key].count++;
+  });
 
-      if (!isPlaying) {
-        isPlaying = true;
-        playBtn.textContent = "Pause";
-        playBtn.classList.add("playing");
-        resetBtn.style.display = "block";
-        document.getElementById("cumulativeChartContainer").style.display = "block";
-        const monthlyDates = getMonthlyDates(selectedDateRange.start, selectedDateRange.end);
-        if (animationInterval) clearInterval(animationInterval);
-
-        animationIndex = 0;
-        currentAnimationDate = monthlyDates[0];
-        animationInterval = setInterval(() => {
-          if (animationIndex >= monthlyDates.length) {
-            clearInterval(animationInterval);
-            isPlaying = false;
-            playBtn.textContent = "Play SSO History";
-            playBtn.classList.remove("playing");
-            animationIndex = 0;
-            return;
-          }
-          currentAnimationDate = monthlyDates[animationIndex];
-          updateMapCumulative(currentAnimationDate);
-          updateCumulativeChart(currentAnimationDate);
-          animationIndex++;
-        }, 200);
-      } else {
-        isPlaying = false;
-        playBtn.textContent = "Resume";
-        playBtn.classList.remove("playing");
-        clearInterval(animationInterval);
-      }
-    }
-
-    function resetHistoryAnimation() {
-      const playBtnMobile = document.getElementById("playHistoryBtnMobile");
-      const playBtnDesktop = document.getElementById("playHistoryBtnDesktop");
-      const resetBtnMobile = document.getElementById("resetHistoryBtnMobile");
-      const resetBtnDesktop = document.getElementById("resetHistoryBtnDesktop");
-      const playBtn = window.innerWidth <= 768 ? playBtnMobile : playBtnDesktop;
-      const resetBtn = window.innerWidth <= 768 ? resetBtnMobile : resetBtnDesktop;
-
-      isPlaying = false;
-      clearInterval(animationInterval);
-      playBtn.textContent = "Play SSO History";
-      playBtn.classList.remove("playing");
-      resetBtn.style.display = "none";
-      document.getElementById("cumulativeChartContainer").style.display = "none";
-      resetMapToNormal();
-      animationIndex = 0;
-      currentAnimationDate = selectedDateRange.start;
-    }
-
-    function makeChartDraggable() {
-      const chart = document.getElementById("cumulativeChartContainer");
-      const header = document.getElementById("floatingChartHeader");
-      let isDragging = false, currentX, currentY, initialX, initialY;
-
-      header.addEventListener("mousedown", (e) => {
-        isDragging = true;
-        initialX = e.clientX - currentX;
-        initialY = e.clientY - currentY;
-        header.style.cursor = "grabbing";
-      });
-
-      document.addEventListener("mousemove", (e) => {
-        if (isDragging) {
-          e.preventDefault();
-          currentX = e.clientX - initialX;
-          currentY = e.clientY - initialY;
-          chart.style.left = `${currentX}px`;
-          chart.style.top = `${currentY}px`;
-        }
-      });
-
-      document.addEventListener("mouseup", () => {
-        isDragging = false;
-        header.style.cursor = "move";
-      });
-
-      currentX = parseInt(window.getComputedStyle(chart).left) || 20;
-      currentY = parseInt(window.getComputedStyle(chart).top) || 20 * window.innerHeight / 100;
-    }
-
-    function makeChartResizable() {
-      const chart = document.getElementById("cumulativeChartContainer");
-      const resizeHandle = document.getElementById("resizeHandle");
-      let isResizing = false, startX, startY, startWidth, startHeight;
-
-      resizeHandle.addEventListener("mousedown", (e) => {
-        isResizing = true;
-        startX = e.clientX;
-        startY = e.clientY;
-        startWidth = parseInt(window.getComputedStyle(chart).width);
-        startHeight = parseInt(window.getComputedStyle(chart).height);
-        e.preventDefault();
-      });
-
-      document.addEventListener("mousemove", (e) => {
-        if (isResizing) {
-          const width = startWidth + (e.clientX - startX);
-          const height = startHeight + (e.clientY - startY);
-          chart.style.width = `${Math.max(300, Math.min(width, window.innerWidth * 0.9))}px`;
-          chart.style.height = `${Math.max(200, Math.min(height, window.innerHeight * 0.9))}px`;
-          if (cumulativeChart) cumulativeChart.resize();
-        }
-      });
-
-      document.addEventListener("mouseup", () => {
-        isResizing = false;
-      });
-    }
-
-    function toggleMapVisibility() {
-      const mapContainer = document.querySelector(".map-container");
-      const chartContainer = document.querySelector(".chart-container");
-      const contentWrapper = document.querySelector(".content-wrapper");
-      const playBtnMobile = document.getElementById("playHistoryBtnMobile");
-      const playBtnDesktop = document.getElementById("playHistoryBtnDesktop");
-      const resetBtnMobile = document.getElementById("resetHistoryBtnMobile");
-      const resetBtnDesktop = document.getElementById("resetHistoryBtnDesktop");
-      const ssoHistory = document.getElementById("ssoHistory");
-
-      mapVisible = !mapVisible;
-      mapContainer.style.display = mapVisible ? "block" : "none";
-      playBtnMobile.style.display = mapVisible ? "block" : "none";
-      playBtnDesktop.style.display = mapVisible ? "block" : "none";
-      resetBtnMobile.style.display = mapVisible ? "block" : "none";
-      resetBtnDesktop.style.display = mapVisible ? "block" : "none";
-      ssoHistory.style.display = mapVisible && isPlaying ? "block" : "none";
-      document.getElementById("toggleMapBtn").textContent = mapVisible ? "Hide Map" : "Show Map";
-
-      if (window.innerWidth <= 768) {
-        chartContainer.style.height = mapVisible ? "50vh" : "calc(100vh - 9rem)";
-        mapContainer.style.height = mapVisible ? "50vh" : "0";
-        contentWrapper.style.flexDirection = "column";
-      } else {
-        contentWrapper.style.flexDirection = mapVisible ? "row" : "column";
-        chartContainer.style.height = mapVisible ? "100%" : "calc(100% - 1rem)";
-        mapContainer.style.height = mapVisible ? "100%" : "0";
-      }
-      if (myChart) myChart.resize();
-      if (mapVisible && mapView) setTimeout(() => mapView.resize(), 100);
-    }
-
-    function toggleSidebar() {
-      const mobileSidebar = document.getElementById("mobile-sidebar");
-      const desktopSidebar = document.getElementById("desktop-sidebar");
-      if (window.innerWidth <= 768) {
-        mobileSidebar.style.display = "block";
-        desktopSidebar.style.display = "none";
-      } else {
-        mobileSidebar.style.display = "none";
-        desktopSidebar.style.display = "block";
-      }
-    }
-
-    function showEventsDialog() {
-      const dialog = document.getElementById("eventsDialog");
-      const eventList = document.getElementById("eventList");
-      eventList.innerHTML = "";
-      const sortedEvents = [...specialWeatherEvents].sort((a, b) => b.date - a.date);
-      sortedEvents.forEach(event => {
-        const li = document.createElement("li");
-        li.className = "event-item";
-        li.innerHTML = `<span><span class="emoji">${event.emoji}</span><span class="date">${formatDateForDisplay(event.date)}</span></span><span class="description">${event.event}</span>`;
-        eventList.appendChild(li);
-      });
-      dialog.style.display = "flex";
-      dialog.addEventListener("click", handleOutsideClick);
-    }
-
-    function closeEventsDialog() {
-      const dialog = document.getElementById("eventsDialog");
-      dialog.style.display = "none";
-      dialog.removeEventListener("click", handleOutsideClick);
-    }
-
-    function handleOutsideClick(event) {
-      const dialog = document.getElementById("eventsDialog");
-      const dialogBox = document.querySelector(".dialog-box");
-      if (event.target === dialog && !dialogBox.contains(event.target)) closeEventsDialog();
-    }
-
-    function downloadCSV(data, filename) {
-      const csvContent = "data:text/csv;charset=utf-8," + data;
-      const encodedUri = encodeURI(csvContent);
-      const link = document.createElement("a");
-      link.setAttribute("href", encodedUri);
-      link.setAttribute("download", filename);
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-    }
-
-    function downloadChartData() {
-      const aggDrought = aggregateData(rawDroughtData, currentPeriod);
-      const aggSSO = aggregateSSOData(rawSSOFeatures, currentPeriod);
-      let droughtCSV = "Date,Exceptional (D4),Extreme (D3),Severe (D2),Moderate (D1),Abnormally Dry (D0),No Drought\n";
-      aggDrought.forEach(row => droughtCSV += `${formatDateForDisplay(row.date)},${row.d4},${row.d3},${row.d2},${row.d1},${row.d0},${row.none}\n`);
-      let ssoCSV = "Date,SSO Count\n";
-      aggSSO.forEach(row => ssoCSV += `${formatDateForDisplay(row.date)},${row.count}\n`);
-      downloadCSV(droughtCSV, `drought_data_${currentPeriod}_${formatDateForDisplay(new Date())}.csv`);
-      downloadCSV(ssoCSV, `sso_data_${currentPeriod}_${formatDateForDisplay(new Date())}.csv`);
-    }
-
-    function getMonthlyDates(startDate, endDate) {
-      const dates = [];
-      let current = new Date(startDate);
-      while (current <= endDate) {
-        dates.push(new Date(current));
-        current.setMonth(current.getMonth() + 1);
-      }
-      return dates;
-    }
-
-function initializeDateSlider() {
-  const minDate = new Date("2019-01-01");
-  // Determine the latest SSO date
-  const latestSSODate = rawSSOFeatures.length > 0 
-    ? new Date(Math.max(...rawSSOFeatures.map(f => new Date(f.attributes.STARTDATE))))
-    : new Date(); // Fallback to current date if no SSO data
-  // Set maxDate to the end of the latest SSO month
-  const maxDate = new Date(latestSSODate.getFullYear(), latestSSODate.getMonth() + 1, 0); // Last day of the month
-  const defaultStart = new Date("2019-01-01");
-  const defaultEnd = new Date(maxDate);
-
-  const slider = document.getElementById("dateSlider");
-  const track = document.getElementById("dateSliderTrack");
-  const minHandle = document.getElementById("dateSliderMin");
-  const maxHandle = document.getElementById("dateSliderMax");
-  const label = document.getElementById("dateRangeLabel");
-
-  const totalMonths = (maxDate.getFullYear() - minDate.getFullYear()) * 12 + (maxDate.getMonth() - minDate.getMonth());
-  const startMonths = 0; // Start at 0 months from minDate
-  const endMonths = (defaultEnd.getFullYear() - minDate.getFullYear()) * 12 + (defaultEnd.getMonth() - minDate.getMonth());
-
-  const startPos = (startMonths / totalMonths) * 100;
-  const endPos = (endMonths / totalMonths) * 100;
-
-  minHandle.style.left = `${startPos}%`;
-  maxHandle.style.left = `${endPos}%`;
-  track.style.left = `${startPos}%`;
-  track.style.width = `${endPos - startPos}%`;
-
-  label.textContent = `${formatMonthForDisplay(defaultStart)} - ${formatMonthForDisplay(defaultEnd)}`;
-  selectedDateRange = { start: defaultStart, end: defaultEnd };
-
-  let activeHandle = null;
-
-  function updateSliderPosition(handle, clientX) {
-    const rect = slider.getBoundingClientRect();
-    let percentage = (clientX - rect.left) / rect.width;
-    percentage = Math.max(0, Math.min(1, percentage));
-
-    let monthsFromStart;
-    let newDate;
-    if (handle === minHandle) {
-      const maxPos = parseFloat(maxHandle.style.left) / 100;
-      percentage = Math.min(percentage, maxPos);
-      minHandle.style.left = `${percentage * 100}%`;
-      track.style.left = `${percentage * 100}%`;
-      track.style.width = `${(maxPos - percentage) * 100}%`;
-      monthsFromStart = Math.floor(percentage * totalMonths);
-      newDate = new Date(minDate.getFullYear(), minDate.getMonth() + monthsFromStart, 1);
-      if (newDate < minDate) newDate = new Date(minDate);
-      selectedDateRange.start = newDate;
-    } else {
-      const minPos = parseFloat(minHandle.style.left) / 100;
-      percentage = Math.max(percentage, minPos);
-      maxHandle.style.left = `${percentage * 100}%`;
-      track.style.width = `${(percentage - minPos) * 100}%`;
-      monthsFromStart = Math.floor(percentage * totalMonths);
-      newDate = new Date(minDate.getFullYear(), minDate.getMonth() + monthsFromStart + 1, 0); // Set to last day of the month
-      if (newDate > maxDate) newDate = new Date(maxDate);
-      selectedDateRange.end = newDate;
-    }
-
-    label.textContent = `${formatMonthForDisplay(selectedDateRange.start)} - ${formatMonthForDisplay(selectedDateRange.end)}`;
-  }
-
-  function startDragging(e) {
-    activeHandle = e.target;
-    activeHandle.classList.add("active");
-    e.preventDefault();
-  }
-
-  function stopDragging() {
-    if (activeHandle) {
-      activeHandle.classList.remove("active");
-      updateChartWithCurrentPeriod();
-      updateMap();
-      if (isPlaying) resetHistoryAnimation();
-      activeHandle = null;
-    }
-  }
-
-  function moveHandle(e) {
-    if (activeHandle) {
-      updateSliderPosition(activeHandle, e.clientX);
-    }
-  }
-
-  minHandle.addEventListener("mousedown", startDragging);
-  maxHandle.addEventListener("mousedown", startDragging);
-  document.addEventListener("mousemove", moveHandle);
-  document.addEventListener("mouseup", stopDragging);
-
-  // Touch support for mobile
-  minHandle.addEventListener("touchstart", (e) => startDragging(e.touches[0]));
-  maxHandle.addEventListener("touchstart", (e) => startDragging(e.touches[0]));
-  document.addEventListener("touchmove", (e) => moveHandle(e.touches[0]));
-  document.addEventListener("touchend", stopDragging);
+  return Object.values(groups).sort((a, b) => a.date - b.date);
 }
 
-    document.addEventListener("DOMContentLoaded", () => {
-      toggleSidebar();
-      showLoading();
-  Promise.all([fetchDroughtData(), fetchSSOData()])
-    .then(([droughtFeatures, ssoFeatures]) => {
-      rawDroughtData = droughtFeatures;
-      rawSSOFeatures = ssoFeatures;
-      createStructureTypeSwitch("#mobile-sidebar");
-      createStructureTypeSwitch("#desktop-sidebar");
-      createCauseCheckboxes("causeCheckboxes");
-      createCauseCheckboxes("causeCheckboxesDesktop");
+/* ===============================
+   CHART
+================================ */
 
-      // Initialize with the full range from defaultStart to defaultEnd
-      initializeDateSlider(); // Ensure selectedDateRange is set first
-      const aggDrought = aggregateData(rawDroughtData, 'monthly');
-      const aggSSO = aggregateSSOData(rawSSOFeatures, 'monthly');
+function buildChart(drought, sso) {
 
-      const ctx = document.getElementById("droughtChart").getContext("2d");
-      myChart = new Chart(ctx, {
-        type: "line",
-        data: {
-          datasets: [
-            { label: "Exceptional", data: aggDrought.map(r => ({ x: r.date, y: r.d4 })), borderColor: "#4F0012", backgroundColor: "rgba(79, 0, 18, 0.7)", fill: "origin", tension: 0.1, pointRadius: 0, order: 1 },
-            { label: "Extreme", data: aggDrought.map(r => ({ x: r.date, y: r.d3 })), borderColor: "#9C0924", backgroundColor: "rgba(156, 9, 36, 0.7)", fill: "-1", tension: 0.1, pointRadius: 0, order: 1 },
-            { label: "Severe", data: aggDrought.map(r => ({ x: r.date, y: r.d2 })), borderColor: "#EC692D", backgroundColor: "rgba(236, 105, 45, 0.7)", fill: "-1", tension: 0.1, pointRadius: 0, order: 1 },
-            { label: "Moderate", data: aggDrought.map(r => ({ x: r.date, y: r.d1 })), borderColor: "#F09D33", backgroundColor: "rgba(240, 157, 51, 0.7)", fill: "-1", tension: 0.1, pointRadius: 0, order: 1 },
-            { label: "Abn. Dry", data: aggDrought.map(r => ({ x: r.date, y: r.d0 })), borderColor: "#FDEFA4", backgroundColor: "rgba(253, 239, 164, 0.7)", fill: "-1", tension: 0.1, pointRadius: 0, order: 1 },
-            { label: "SSO Count", data: aggSSO.map(r => ({ x: r.date, y: r.count })), borderColor: "#00FF00", backgroundColor: "rgba(0, 255, 0, 0.7)", fill: false, tension: 0, pointRadius: 3, yAxisID: "y2", order: 0 },
-            { label: "Special Weather Events", data: specialWeatherEvents.map(event => ({ x: event.date, y: 100, event: event.event, date: event.date.toISOString().split('T')[0] })), type: "scatter", yAxisID: "y", pointRadius: 0, pointHoverRadius: 50, showLine: false, order: -1, tooltip: { callbacks: { label: ctx => `${ctx.raw.date} | ${ctx.raw.event}` } } }
-          ]
+  const ctx = document
+    .getElementById("droughtChart")
+    .getContext("2d");
+
+  myChart = new Chart(ctx, {
+    type: "line",
+
+    data: {
+      datasets: [
+
+        {
+          label: "Exceptional",
+          data: drought.map(r => ({ x: r.date, y: r.d4 })),
+          borderColor: "#4F0012",
+          backgroundColor: "rgba(79,0,18,0.7)",
+          fill: "origin",
+          tension: 0.1,
+          pointRadius: 0
         },
-        options: {
-          responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false },
-          scales: { x: { type: "time", time: { unit: "month", tooltipFormat: "yyyy-MM-dd" }, ticks: { color: "#00d4ff" }, grid: { color: "rgba(0, 212, 255, 0.2)" } }, y: { stacked: true, min: 0, suggestedMax: 110, ticks: { color: "#00d4ff" }, grid: { color: "rgba(0, 212, 255, 0.2)" } }, y2: { type: "linear", position: "right", ticks: { color: "#00ff00" }, grid: { drawOnChartArea: false } } },
-          plugins: {
-            legend: { labels: { color: "#00d4ff", font: { family: 'Orbitron' } }, position: "top" },
-            title: { display: true, text: "Drought & Public Sewer Overflow (Monthly)", color: "#00d4ff", font: { size: 16, family: 'Orbitron' } },
-            zoom: { zoom: { wheel: { enabled: true }, drag: { enabled: true }, mode: "x" }, pan: { enabled: true, mode: "x" } },
-            annotation: {
-              annotations: [
-                ...specialWeatherEvents.filter(e => e.date >= selectedDateRange.start && e.date <= selectedDateRange.end).map((e, i) => ({ type: 'label', xValue: e.date, yValue: 100, content: e.emoji, color: '#ffffff', font: { size: 20 }, position: 'center', xAdjust: 0, yAdjust: -5, backgroundColor: 'rgba(0, 0, 0, 0)', borderWidth: 0 })),
-                { type: 'line', id: 'cursorLine', mode: 'vertical', scaleID: 'x', value: aggSSO.length > 0 ? aggSSO[aggSSO.length - 1].date : selectedDateRange.end, borderColor: '#00d4ff', borderWidth: 2, label: { enabled: true, content: aggSSO.length > 0 ? formatDateForDisplay(aggSSO[aggSSO.length - 1].date) : 'End', position: 'top', backgroundColor: 'rgba(0, 212, 255, 0.8)', font: { size: 12, family: 'Orbitron' } } }
-              ]
+
+        {
+          label: "Extreme",
+          data: drought.map(r => ({ x: r.date, y: r.d3 })),
+          borderColor: "#9C0924",
+          backgroundColor: "rgba(156,9,36,0.7)",
+          fill: "-1",
+          tension: 0.1,
+          pointRadius: 0
+        },
+
+        {
+          label: "SSO Count",
+          data: sso.map(r => ({ x: r.date, y: r.count })),
+          borderColor: "#00FF00",
+          backgroundColor: "rgba(0,255,0,0.6)",
+          fill: false,
+          tension: 0,
+          pointRadius: 3,
+          yAxisID: "y2"
+        },
+
+        /* WEATHER EVENTS DATASET */
+
+        {
+          label: "Weather Events",
+          type: "scatter",
+
+          data: specialWeatherEvents.map(e => ({
+            x: e.date,
+            y: 105,
+            event: e.event,
+            emoji: e.emoji,
+            date: formatDate(e.date)
+          })),
+
+          yAxisID: "y",
+
+          showLine: false,
+
+          pointRadius: 4,
+          pointHoverRadius: 10,
+
+          pointBackgroundColor: "rgba(0,0,0,0)",
+          pointBorderColor: "rgba(0,0,0,0)"
+        }
+      ]
+    },
+
+    options: {
+
+      responsive: true,
+      maintainAspectRatio: false,
+
+      interaction: {
+        mode: "nearest",
+        intersect: true,
+        axis: "x"
+      },
+
+      scales: {
+
+        x: {
+          type: "time",
+          time: {
+            unit: "month",
+            tooltipFormat: "yyyy-MM-dd"
+          },
+          ticks: { color: "#00d4ff" },
+          grid: { color: "rgba(0,212,255,0.2)" }
+        },
+
+        y: {
+          stacked: true,
+          min: 0,
+          suggestedMax: 110,
+          ticks: { color: "#00d4ff" },
+          grid: { color: "rgba(0,212,255,0.2)" }
+        },
+
+        y2: {
+          type: "linear",
+          position: "right",
+          ticks: { color: "#00ff00" },
+          grid: { drawOnChartArea: false }
+        }
+
+      },
+
+      plugins: {
+
+        title: {
+          display: true,
+          text: "Drought & Public Sewer Overflow",
+          color: "#00d4ff"
+        },
+
+        annotation: {
+          annotations: specialWeatherEvents.map(e => ({
+            type: "label",
+            xValue: e.date,
+            yValue: 100,
+            content: e.emoji,
+            font: { size: 20 },
+            backgroundColor: "rgba(0,0,0,0)",
+            borderWidth: 0
+          }))
+        },
+
+        tooltip: {
+
+          mode: "nearest",
+          intersect: true,
+
+          callbacks: {
+
+            title(items) {
+              return formatDate(items[0].parsed.x);
             },
-            tooltip: { mode: "index", intersect: false, backgroundColor: 'rgba(10, 10, 30, 0.9)', titleFont: { family: 'Orbitron' }, bodyFont: { family: 'Orbitron' }, callbacks: { label: ctx => ctx.dataset.label === "Special Weather Events" ? `${ctx.raw.date} | ${ctx.raw.event}` : `${ctx.dataset.label}: ${ctx.raw.y}` } }
+
+            label(ctx) {
+
+              if (ctx.dataset.label === "Weather Events") {
+                return ctx.raw.date + " | " + ctx.raw.event;
+              }
+
+              return ctx.dataset.label + ": " + ctx.raw.y;
+            }
           }
         }
-      });
-
-          initializeCumulativeChart();
-          makeChartDraggable();
-          makeChartResizable();
-          document.getElementById("closeCumulativeChart").addEventListener("click", () => {
-            document.getElementById("cumulativeChartContainer").style.display = "none";
-            if (isPlaying) resetHistoryAnimation();
-          });
-
-          initializeDateSlider();
-          return initializeMap();
-        })
-        .then(() => {
-          hideLoading();
-          document.getElementById("toggleMapBtn").addEventListener("click", toggleMapVisibility);
-          document.getElementById("weeklyBtn").addEventListener("click", () => { currentPeriod = 'weekly'; updateChartWithCurrentPeriod(); updateMap(); });
-          document.getElementById("monthlyBtn").addEventListener("click", () => { currentPeriod = 'monthly'; updateChartWithCurrentPeriod(); updateMap(); });
-          document.getElementById("yearlyBtn").addEventListener("click", () => { currentPeriod = 'yearly'; updateChartWithCurrentPeriod(); updateMap(); });
-          document.getElementById("resetZoomBtn").addEventListener("click", () => {
-            if (myChart) myChart.resetZoom();
-            if (mapView) mapView.goTo({ center: [-95.3632715, 29.7632836], zoom: 10 });
-            updateMap();
-          });
-          document.getElementById("showEventsBtn").addEventListener("click", showEventsDialog);
-          document.getElementById("closeEventsDialog").addEventListener("click", closeEventsDialog);
-          document.getElementById("playHistoryBtnMobile").addEventListener("click", toggleHistoryAnimation);
-          document.getElementById("playHistoryBtnDesktop").addEventListener("click", toggleHistoryAnimation);
-          document.getElementById("resetHistoryBtnMobile").addEventListener("click", resetHistoryAnimation);
-          document.getElementById("resetHistoryBtnDesktop").addEventListener("click", resetHistoryAnimation);
-          document.getElementById("downloadBtn").addEventListener("click", downloadChartData); // Download button event listener
-          document.getElementById("playHistoryBtnMobile").style.display = mapVisible ? "block" : "none";
-          document.getElementById("playHistoryBtnDesktop").style.display = mapVisible ? "block" : "none";
-          document.getElementById("resetHistoryBtnMobile").style.display = "none";
-          document.getElementById("resetHistoryBtnDesktop").style.display = "none";
-          document.getElementById("downloadBtn").style.display = "inline-flex"; // Explicitly ensure visibility
-		        // Force an initial update with the correct range
-      updateChartWithCurrentPeriod();
-      updateMap();
-        })
-        .catch(error => {
-          console.error("Error initializing:", error);
-          hideLoading();
-          alert("Failed to load data. Please try refreshing the page.");
-        });
-    });
-
-    window.addEventListener('resize', () => {
-      toggleSidebar();
-      const chartContainer = document.querySelector(".chart-container");
-      const mapContainer = document.querySelector(".map-container");
-      const contentWrapper = document.querySelector(".content-wrapper");
-      const playBtnMobile = document.getElementById("playHistoryBtnMobile");
-      const playBtnDesktop = document.getElementById("playHistoryBtnDesktop");
-      const resetBtnMobile = document.getElementById("resetHistoryBtnMobile");
-      const resetBtnDesktop = document.getElementById("resetHistoryBtnDesktop");
-      const ssoHistory = document.getElementById("ssoHistory");
-
-      if (window.innerWidth <= 768) {
-        chartContainer.style.height = mapVisible ? "50vh" : "calc(100vh - 9rem)";
-        contentWrapper.style.flexDirection = "column";
-        mapContainer.style.height = mapVisible ? "50vh" : "0";
-      } else {
-        contentWrapper.style.flexDirection = mapVisible ? "row" : "column";
-        chartContainer.style.height = mapVisible ? "100%" : "calc(100% - 1rem)";
-        mapContainer.style.height = mapVisible ? "100%" : "0";
       }
-      playBtnMobile.style.display = mapVisible ? "block" : "none";
-      playBtnDesktop.style.display = mapVisible ? "block" : "none";
-      resetBtnMobile.style.display = mapVisible ? "block" : "none";
-      resetBtnDesktop.style.display = mapVisible ? "block" : "none";
-      ssoHistory.style.display = mapVisible && isPlaying ? "block" : "none";
-      if (myChart) myChart.resize();
-    });
-  </script>
+    }
+  });
+}
+
+/* ===============================
+   INIT
+================================ */
+
+document.addEventListener("DOMContentLoaded", () => {
+
+  Promise.all([
+    fetchDroughtData(),
+    fetchSSOData()
+  ])
+  .then(([drought, ssoFeatures]) => {
+
+    rawDroughtData = drought;
+    rawSSOFeatures = ssoFeatures;
+
+    const ssoAgg = aggregateSSO(rawSSOFeatures);
+
+    buildChart(rawDroughtData, ssoAgg);
+
+  })
+  .catch(err => {
+    console.error(err);
+    alert("Failed loading data.");
+  });
+
+});
+</script>
 </body>
 </html>
+
